@@ -4,11 +4,15 @@ services:
   app:
     build: .
     ports:
-      - "8080:8080"
+      - "443:443"
     environment:
       - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?sslmode=disable
       - PRIVATE_KEY=${PRIVATE_KEY}
       - PUBLIC_KEY=${PUBLIC_KEY}
+      - GOOGLE_CLIENT_KEY=${GOOGLE_CLIENT_KEY}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - COOKIE_PASS=${COOKIE_PASS}
+      - ENDPOINT_URL=${ENDPOINT_URL}
     depends_on:
       db:
         condition: service_healthy
