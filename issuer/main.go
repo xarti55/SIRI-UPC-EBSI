@@ -193,10 +193,7 @@ func issueVC(username string, DID string) (string, error) {
 		"issuer":            "did:ebsi:UPCID",
 		"issuanceDate":      now.UTC().Format(time.RFC3339Nano),
 		"credentialSubject": subject,
-		"credentialStatus": map[string]interface{}{
-			"id":   "https://your-server.com/status/123",  
-			"type": "CredentialStatusList2021",            
-		},
+		
 	}
 
 	token := jwt.New()
