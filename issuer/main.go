@@ -214,7 +214,7 @@ func issueVC(username string, DID string) (string, error) {
 	if err := token.Set(jwt.IssuedAtKey, now); err != nil {
 		return "", err
 	}
-	if err := token.Set(jwt.ExpirationKey, now.Add(24*time.Day)); err != nil {
+	if err := token.Set(jwt.ExpirationKey, now.Add(24*24*time.Hour)); err != nil {
 		return "", err
 	}
 	if err := token.Set(jwt.IssuerKey, "did:ebsi:UPCID"); err != nil {
