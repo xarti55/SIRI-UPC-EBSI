@@ -93,13 +93,13 @@ func generatePreAuthCodeJWT() (string, error) {
 	if err := token.Set(jwt.IssuerKey, "did:ebsi:UPCID"); err != nil {
 		return "", err
 	}
-	if err := token.Set(jwt.AudienceKey, "https://your-client-app.example.com"); err != nil { // replace with your client ID or URL
+	if err := token.Set(jwt.AudienceKey, "https://your-client-app.example.com"); err != nil { 
 		return "", err
 	}
 	if err := token.Set(jwt.IssuedAtKey, now); err != nil {
 		return "", err
 	}
-	if err := token.Set(jwt.ExpirationKey, now.Add(10 * time.Minute)); err != nil { // short-lived token
+	if err := token.Set(jwt.ExpirationKey, now.Add(10 * time.Minute)); err != nil { 
 		return "", err
 	}
 	if err := token.Set("nonce", "random-nonce-abc"); err != nil { // or generate a real random nonce
@@ -214,7 +214,7 @@ func issueVC(username string, DID string) (string, error) {
 	if err := token.Set(jwt.IssuedAtKey, now); err != nil {
 		return "", err
 	}
-	if err := token.Set(jwt.ExpirationKey, now.Add(24*time.Hour)); err != nil {
+	if err := token.Set(jwt.ExpirationKey, now.Add(24*time.Day)); err != nil {
 		return "", err
 	}
 	if err := token.Set(jwt.IssuerKey, "did:ebsi:UPCID"); err != nil {
