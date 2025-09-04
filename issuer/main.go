@@ -1,33 +1,52 @@
 package main
 
 import (
-	"crypto/ecdsa"
-	"crypto/sha256"
-	"crypto/x509"
-	"database/sql"
-	"encoding/json"
-	"encoding/pem"
-	"encoding/base64"
 	"fmt"
 	"log"
 	"math/big"
 	"net/http"
 	"os"
 	"strings"
+	"errors"
 	"time"
-	"github.com/gin-contrib/cors"
-	"github.com/gin-gonic/gin"
+	"io"
+
+	"crypto/ecdsa"
+	"crypto/sha256"
+	"crypto/x509"
+
+	"database/sql"
+
+	"encoding/json"
+	"encoding/pem"
+	"encoding/base64"
+	"encoding/hex"
+
+	//"math/rand"
+	
 	"github.com/lestrrat-go/jwx/v2/jwa"
 	"github.com/lestrrat-go/jwx/v2/jwt"
+
 	_ "github.com/lib/pq"
+
+
 	"github.com/skip2/go-qrcode"
-	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
-	"io"
+
+	//"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
+	
+	//"github.com/vocdoni/davinci-node/crypto/csp"
+	//"github.com/vocdoni/davinci-node/types"
+	//"github.com/vocdoni/davinci-node/util"
+
+	"github.com/gin-gonic/gin"
+	"github.com/gin-contrib/cors"
 	"github.com/gin-contrib/sessions"
     "github.com/gin-contrib/sessions/cookie"
-)
 
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
+)
 
 
 var googleOauthConfig = &oauth2.Config{
@@ -36,6 +55,25 @@ var googleOauthConfig = &oauth2.Config{
 	RedirectURL:  os.Getenv("ENDPOINT_URL")  + "/auth/google/callback",
 	Scopes:       []string{"https://www.googleapis.com/auth/userinfo.email"},
 	Endpoint:     google.Endpoint,
+}
+
+type JWK struct {
+    Kty string `json:"kty"`
+    Crv string `json:"crv"`
+    X   string `json:"x"`
+    Y   string `json:"y"`
+}
+
+type VerificationMethod struct {
+    ID           string `json:"id"`
+    Type         string `json:"type"`
+    Controller   string `json:"controller"`
+    PublicKeyJwk *JWK   `json:"publicKeyJwk,omitempty"`
+}
+
+type DIDDocument struct {
+    ID                 string               `json:"id"`
+    VerificationMethod []VerificationMethod `json:"verificationMethod"`
 }
 
 type RegisterPayload struct {
@@ -64,9 +102,166 @@ type IncomingRequest struct {
 	Format string   `json:"format"`
 }
 
+type DIDResolutionResponse struct {
+    DIDDocument DIDDocument `json:"didDocument"`
+}
+
+type VC struct {
+	Context           []string          `json:"@context"`
+	CredentialStatus  map[string]string `json:"credentialStatus"`
+	CredentialSubject CredentialSubject `json:"credentialSubject"`
+	IssuanceDate      string            `json:"issuanceDate"`
+	Issuer            string            `json:"issuer"`
+	Type              []string          `json:"type"`
+}
+
+type VerifiedJWT struct {
+	Exp int64  `json:"exp"`
+	Iat int64  `json:"iat"`
+	Iss string `json:"iss"`
+	Jti string `json:"jti"`
+	Nbf int64  `json:"nbf"`
+	Sub string `json:"sub"`
+	VC  VC     `json:"vc"`
+}
+
 var db *sql.DB
 var privKey *ecdsa.PrivateKey
 var pubKey *ecdsa.PublicKey
+
+func LoadECDSAPublicKeyFromPEM(pemData string) (*ecdsa.PublicKey, error) {
+	block, _ := pem.Decode([]byte(pemData))
+	if block == nil {
+		return nil, errors.New("failed to decode PEM block")
+	}
+
+	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse ECDSA public key: %w", err)
+	}
+
+	ecdsaPubKey, ok := pub.(*ecdsa.PublicKey)
+	if !ok {
+		return nil, errors.New("not an ECDSA public key")
+	}
+
+	return ecdsaPubKey, nil
+}
+
+func VerifyJWTAndReturnPayload(jwtString string, pubKey *ecdsa.PublicKey) (*VerifiedJWT, error) {
+	token, err := jwt.ParseString(jwtString, jwt.WithKey(jwa.ES256, pubKey))
+	if err != nil {
+		return nil, fmt.Errorf("JWT verification failed: %w", err)
+	}
+
+	jsonBuf, err := json.Marshal(token)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal JWT token: %w", err)
+	}
+
+	var verifiedJWT VerifiedJWT
+	if err := json.Unmarshal(jsonBuf, &verifiedJWT); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal payload into struct: %w", err)
+	}
+
+	return &verifiedJWT, nil
+}
+
+func decodeBase64URL(data string) ([]byte, error) {
+    if pad := len(data) % 4; pad != 0 {
+        data += strings.Repeat("=", 4-pad)
+    }
+    return base64.URLEncoding.DecodeString(data)
+}
+
+func getIssuerPublicKey(did string) (string, error) {
+	url := "https://api-pilot.ebsi.eu/did-registry/v5/identifiers/" + did
+
+	resp, err := http.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve Issuer DID: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("resolver returned %d", resp.StatusCode)
+	}
+
+	// Define matching struct for the v5 response
+	var result struct {
+		VerificationMethod []struct {
+			PublicKeyJwk *JWK `json:"publicKeyJwk"`
+		} `json:"verificationMethod"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("invalid JSON from resolver: %w", err)
+	}
+
+	// Look for a JWK with EC key type
+	for _, vm := range result.VerificationMethod {
+		if vm.PublicKeyJwk != nil && vm.PublicKeyJwk.Kty == "EC" {
+			xBytes, err := decodeBase64URL(vm.PublicKeyJwk.X)
+			if err != nil {
+				return "", fmt.Errorf("failed to decode x: %w", err)
+			}
+			yBytes, err := decodeBase64URL(vm.PublicKeyJwk.Y)
+			if err != nil {
+				return "", fmt.Errorf("failed to decode y: %w", err)
+			}
+
+			// Concatenate 0x04 || X || Y (uncompressed EC format)
+			pubKey := append([]byte{0x04}, append(xBytes, yBytes...)...)
+			return "0x" + hex.EncodeToString(pubKey), nil
+		}
+	}
+
+	return "", fmt.Errorf("no EC public key found in DID document")
+}
+
+func getPublicKeyFromDID(did string) (string, error) {
+    url := "https://uniresolver.io/1.0/identifiers/" + did
+
+    resp, err := http.Get(url)
+    if err != nil {
+        return "", fmt.Errorf("failed to resolve user DID: %w", err)
+    }
+    defer resp.Body.Close()
+
+    if resp.StatusCode != http.StatusOK {
+        return "", fmt.Errorf("resolver returned %d", resp.StatusCode)
+    }
+
+    var result DIDResolutionResponse
+    if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+        return "", fmt.Errorf("invalid JSON from resolver: %w", err)
+    }
+
+    if len(result.DIDDocument.VerificationMethod) == 0 {
+        return "", errors.New("no verification methods found")
+    }
+
+    // Use the first verification method with a JWK
+    for _, vm := range result.DIDDocument.VerificationMethod {
+        if vm.PublicKeyJwk != nil && vm.PublicKeyJwk.Kty == "EC" {
+            xBytes, err := decodeBase64URL(vm.PublicKeyJwk.X)
+            if err != nil {
+                return "", fmt.Errorf("failed to decode x: %w", err)
+            }
+
+            yBytes, err := decodeBase64URL(vm.PublicKeyJwk.Y)
+            if err != nil {
+                return "", fmt.Errorf("failed to decode y: %w", err)
+            }
+
+            // Uncompressed EC key format: 0x04 || X || Y
+            pubKey := append([]byte{0x04}, append(xBytes, yBytes...)...)
+            return "0x" + hex.EncodeToString(pubKey), nil
+        }
+    }
+
+    return "", errors.New("no supported EC public key found")
+}
 
 func decodeJWTPayload(token string) (string, error) {
 	parts := strings.Split(token, ".")
@@ -117,7 +312,6 @@ func generatePreAuthCodeJWT() (string, error) {
 
 	return string(signed), nil
 }
-
 
 // Get the private key from the enviroment
 func getPrivateKey() {
@@ -300,6 +494,89 @@ func getVC(c *gin.Context) {
 
 }
 
+func DIDtoKey(){
+
+}
+
+func getProof(c *gin.Context){
+
+	
+	jwtString := c.PostForm("JWT")
+	if jwtString == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing 'JWT' in POST form data"})
+		return
+	}
+
+	//IssuerPubKey := getIssuerPublicKey(os.Getenv("ISSUER_DID"))
+	IssuerPubKey := pubKey
+	VC, err := VerifyJWTAndReturnPayload(jwtString, IssuerPubKey)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired JWT"})
+		return
+	}
+
+
+	// Select the CSP origin and provide a seed
+	//origin := types.CensusOriginCSPEdDSABLS12377
+	//seed := []byte(os.Getenv("CSP_SEED"))
+
+	// Create a new CSP instance
+	//c, err := csp.New(origin, seed)
+	//if err != nil {
+	//	panic(fmt.Sprintf("failed to create CSP: %v", err))
+	//}
+
+	// Mock process identifier
+	//processID := &types.ProcessID{
+	//	Address: common.BytesToAddress(util.RandomBytes(20)),
+	//	ChainID: 1,
+	//	Nonce:   rand.Uint64(),
+	//}
+
+	//Get the public key from the DID
+	pubKeyHex, err := getPublicKeyFromDID(VC.VC.CredentialSubject.ID)
+	if err != nil {
+		fmt.Println("Error:", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to extract public key from DID"})
+		return
+	}
+
+    fmt.Println("Public Key (hex):", pubKeyHex)
+	pubKeyHex = strings.TrimPrefix(pubKeyHex, "0x")
+	pubKeyBytes, err := hex.DecodeString(pubKeyHex)
+	if err != nil {
+		log.Fatalf("Failed to decode public key: %v", err)
+	}
+
+	// Remove the 0x04 prefix (first byte)
+	pubKeyBytes = pubKeyBytes[1:]
+
+	// Hash the remaining 64 bytes with Keccak256
+	hash := crypto.Keccak256(pubKeyBytes)
+
+	//  Take the last 20 bytes of the hash
+	_ = hash[12:]
+	//voter := hash[12:]
+	// Generate a census proof for the voter
+	//proof, err := c.GenerateProof(processID, voter)
+	//if err != nil {
+	//	panic(fmt.Sprintf("failed to generate proof: %v", err))
+	//}
+
+	// Verify the generated proof
+	//if err := c.VerifyProof(proof); err != nil {
+	//	panic(fmt.Sprintf("failed to verify proof: %v", err))
+	//}
+
+	fmt.Println("Census proof verified successfully!")
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":           "Proof verified successfully",
+		"credentialSubject": VC.VC.CredentialSubject,
+		"publicKeyHex":      pubKeyHex,
+	})
+}
+
 func main() {
 
 	//Connect to the DB
@@ -336,7 +613,7 @@ func main() {
 	})
 
 	//testing
-	router.GET("/getusers", func(c *gin.Context) {
+	router.GET("/issuer/getusers", func(c *gin.Context) {
 		rows, err := db.Query("SELECT username FROM users WHERE username IS NOT NULL")
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -389,7 +666,7 @@ func main() {
 	})
 
 
-	router.GET("/qr", func(c *gin.Context) {
+	router.GET("/issuer/qr", func(c *gin.Context) {
 		offerURL := "openid-credential-offer://?credential_offer_uri=" + os.Getenv("ENDPOINT_URL") + "/credential-offer"
 
 		png, err := qrcode.Encode(offerURL, qrcode.Medium, 256)
@@ -487,7 +764,7 @@ func main() {
 
 
 
-	router.GET("/auth/google", func(c *gin.Context) {
+	router.GET("issuer/auth/google", func(c *gin.Context) {
 		url := googleOauthConfig.AuthCodeURL("random-state") // TODO: use real state
 		c.Redirect(http.StatusFound, url)
 	})
@@ -544,7 +821,7 @@ func main() {
 		<html>
 		<body>
 			<h1>Welcome, ` + email + `</h1>
-			<form method="POST" action="/register-did">
+			<form method="POST" action="/issuer/register-did">
 			<label for="did">Enter your DID:</label>
 			<input type="text" id="did" name="did" required />
 			<button type="submit">Submit DID</button>
@@ -554,14 +831,18 @@ func main() {
 		`)
 	})
 
+	router.GET("/verifier/root" , func(c *gin.Context){
+		//eddsaCSP, err := csp.New(types.CensusOriginCSPEdDSABLS12377, []byte(cspSeed))
+		//if err != nil {
+		// handle error
+		//}
+		//root := eddsaCSP.CensusRoot() // return a custom struct that is json serializable json wrapper
+	})
 
 	
-
-
-
-
-	router.POST("/getVC", getVC)
-	router.POST("/register-did", registerDID)
+	router.POST("/verifier/getProof", getProof)
+	router.POST("/issuer/getVC", getVC)
+	router.POST("/issuer/register-did", registerDID)
 	err = router.RunTLS(":443", "/cert.pem", "/key.pem")
 	if err != nil {
 		log.Fatalf("Failed to start HTTPS server: %v", err)

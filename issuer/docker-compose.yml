@@ -13,6 +13,8 @@ services:
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
       - COOKIE_PASS=${COOKIE_PASS}
       - ENDPOINT_URL=${ENDPOINT_URL}
+      - CSP_SEED=${CSP_SEED}
+      - ISSUER_DID=${ISSUER_DID}
     depends_on:
       db:
         condition: service_healthy
