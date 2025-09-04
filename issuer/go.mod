@@ -1,6 +1,6 @@
 module issuer
 
-go 1.23.0
+go 1.24.0
 
 require (
 	github.com/bytedance/sonic v1.14.0 // indirect
@@ -31,3 +31,5 @@ require (
 	google.golang.org/protobuf v1.36.8 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/consensys/gnark => github.com/vocdoni/gnark-no-assert v0.0.0-20250723103948-9e2777846d75

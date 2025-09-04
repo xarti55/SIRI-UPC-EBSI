@@ -14,6 +14,7 @@ RUN ls -la cert.pem key.pem
 
 # Build the Go app
 RUN go get github.com/lib/pq
+RUN go get github.com/vocdoni/davinci-node@main
 RUN go mod tidy
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
 

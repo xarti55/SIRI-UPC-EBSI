@@ -22,7 +22,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 
-	//"math/rand"
+	"math/rand"
 	
 	"github.com/lestrrat-go/jwx/v2/jwa"
 	"github.com/lestrrat-go/jwx/v2/jwt"
@@ -32,12 +32,12 @@ import (
 
 	"github.com/skip2/go-qrcode"
 
-	//"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	
-	//"github.com/vocdoni/davinci-node/crypto/csp"
-	//"github.com/vocdoni/davinci-node/types"
-	//"github.com/vocdoni/davinci-node/util"
+	"github.com/vocdoni/davinci-node/crypto/csp"
+	"github.com/vocdoni/davinci-node/types"
+	"github.com/vocdoni/davinci-node/util"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gin-contrib/cors"
@@ -517,21 +517,21 @@ func getProof(c *gin.Context){
 
 
 	// Select the CSP origin and provide a seed
-	//origin := types.CensusOriginCSPEdDSABLS12377
-	//seed := []byte(os.Getenv("CSP_SEED"))
+	origin := types.CensusOriginCSPEdDSABLS12377
+	seed := []byte(os.Getenv("CSP_SEED"))
 
 	// Create a new CSP instance
-	//c, err := csp.New(origin, seed)
-	//if err != nil {
-	//	panic(fmt.Sprintf("failed to create CSP: %v", err))
-	//}
+	csp, err := csp.New(origin, seed)
+	if err != nil {
+		panic(fmt.Sprintf("failed to create CSP: %v", err))
+	}
 
 	// Mock process identifier
-	//processID := &types.ProcessID{
-	//	Address: common.BytesToAddress(util.RandomBytes(20)),
-	//	ChainID: 1,
-	//	Nonce:   rand.Uint64(),
-	//}
+	processID := &types.ProcessID{
+		Address: common.BytesToAddress(util.RandomBytes(20)),
+		ChainID: 1,
+		Nonce:   rand.Uint64(),
+	}
 
 	//Get the public key from the DID
 	pubKeyHex, err := getPublicKeyFromDID(VC.VC.CredentialSubject.ID)
@@ -555,25 +555,24 @@ func getProof(c *gin.Context){
 	hash := crypto.Keccak256(pubKeyBytes)
 
 	//  Take the last 20 bytes of the hash
-	_ = hash[12:]
-	//voter := hash[12:]
+	voter := common.BytesToAddress(hash[12:])
+
 	// Generate a census proof for the voter
-	//proof, err := c.GenerateProof(processID, voter)
-	//if err != nil {
-	//	panic(fmt.Sprintf("failed to generate proof: %v", err))
-	//}
+	proof, err := csp.GenerateProof(processID, voter)
+	if err != nil {
+		panic(fmt.Sprintf("failed to generate proof: %v", err))
+	}
 
 	// Verify the generated proof
-	//if err := c.VerifyProof(proof); err != nil {
-	//	panic(fmt.Sprintf("failed to verify proof: %v", err))
-	//}
+	if err := csp.VerifyProof(proof); err != nil {
+		panic(fmt.Sprintf("failed to verify proof: %v", err))
+	}
 
 	fmt.Println("Census proof verified successfully!")
 
 	c.JSON(http.StatusOK, gin.H{
-		"message":           "Proof verified successfully",
-		"credentialSubject": VC.VC.CredentialSubject,
 		"publicKeyHex":      pubKeyHex,
+		"proof":			proof,
 	})
 }
 
