@@ -34,5 +34,7 @@ services:
       retries: 10
       start_period: 5s
 
+
+
 volumes:
   pgdata:

@@ -285,7 +285,7 @@ func generatePreAuthCodeJWT() (string, error) {
 
 	token := jwt.New()
 
-	if err := token.Set(jwt.IssuerKey, "did:ebsi:UPCID"); err != nil {
+	if err := token.Set(jwt.IssuerKey, "did:ebsi:zwLxYsDTPjsSZCfH9VcUzSA"); err != nil {
 		return "", err
 	}
 	if err := token.Set(jwt.AudienceKey, "https://your-client-app.example.com"); err != nil { 
@@ -384,7 +384,7 @@ func issueVC(username string, DID string) (string, error) {
 			"https://api-pilot.ebsi.eu/trusted-schemas-registry/v3/schemas/z5rvJVo9iVGZTqEWVVKNYWyw31FjDWvXhz91qtGo39y44",
 		},
 		"type":              []string{"VerifiableCredential", "VerifiableEducationalID"},
-		"issuer":            "did:ebsi:UPCID",
+		"issuer":            "did:ebsi:zwLxYsDTPjsSZCfH9VcUzSA",
 		"issuanceDate":      now.UTC().Format(time.RFC3339Nano),
 		"credentialSubject": subject,
 		
@@ -408,7 +408,7 @@ func issueVC(username string, DID string) (string, error) {
 	if err := token.Set(jwt.ExpirationKey, now.Add(24*24*time.Hour)); err != nil {
 		return "", err
 	}
-	if err := token.Set(jwt.IssuerKey, "did:ebsi:UPCID"); err != nil {
+	if err := token.Set(jwt.IssuerKey, "did:ebsi:zwLxYsDTPjsSZCfH9VcUzSA"); err != nil {
 		return "", err
 	}
 	if err := token.Set(jwt.SubjectKey, subject.ID); err != nil {
@@ -507,7 +507,7 @@ func getProof(c *gin.Context){
 		return
 	}
 
-	//IssuerPubKey := getIssuerPublicKey(os.Getenv("ISSUER_DID"))
+	//IssuerPubKey , _:= getIssuerPublicKey(os.Getenv("ISSUER_DID"))
 	IssuerPubKey := pubKey
 	VC, err := VerifyJWTAndReturnPayload(jwtString, IssuerPubKey)
 	if err != nil {
@@ -540,7 +540,13 @@ func getProof(c *gin.Context){
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to extract public key from DID"})
 		return
 	}
+	var username string
+	err = db.QueryRow("SELECT * FROM FINE_users WHERE username = $1", VC.VC.CredentialSubject.Identifier).Scan(&username); if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "User is not part of FINE"})
+		return
+	}
 
+	fmt.Println("User: ", username)
     fmt.Println("Public Key (hex):", pubKeyHex)
 	pubKeyHex = strings.TrimPrefix(pubKeyHex, "0x")
 	pubKeyBytes, err := hex.DecodeString(pubKeyHex)
@@ -571,7 +577,6 @@ func getProof(c *gin.Context){
 	fmt.Println("Census proof verified successfully!")
 
 	c.JSON(http.StatusOK, gin.H{
-		"publicKeyHex":      pubKeyHex,
 		"proof":			proof,
 	})
 }
@@ -749,7 +754,7 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{
 			"credential_issuer":    os.Getenv("ENDPOINT_URL") ,
 			"authorization_server": os.Getenv("ENDPOINT_URL") ,
-			"credential_endpoint":  os.Getenv("ENDPOINT_URL") + "/getVC",
+			"credential_endpoint":  os.Getenv("ENDPOINT_URL") + "/issuer/getVC",
 			"credentials_supported": []map[string]interface{}{
 				{
 					"format": "jwt_vc",
