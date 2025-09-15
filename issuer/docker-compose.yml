@@ -4,7 +4,7 @@ services:
   app:
     build: .
     ports:
-      - "443:443"
+      - "7531:7531"
     environment:
       - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?sslmode=disable
       - PRIVATE_KEY=${PRIVATE_KEY}

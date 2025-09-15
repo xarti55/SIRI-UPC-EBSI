@@ -618,23 +618,23 @@ func main() {
 
 	//testing
 	router.GET("/issuer/getusers", func(c *gin.Context) {
-		rows, err := db.Query("SELECT username FROM users WHERE username IS NOT NULL")
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		defer rows.Close()
-
-		var usernames []string
-		for rows.Next() {
-			var username string
-			if err := rows.Scan(&username); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
-			}
-			usernames = append(usernames, username)
-		}
-		c.JSON(http.StatusOK, gin.H{"status": "success", "message": usernames})
+	//	rows, err := db.Query("SELECT username FROM users WHERE username IS NOT NULL")
+	//	if err != nil {
+	//		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	//		return
+	//	}
+	//	defer rows.Close()
+//
+//		var usernames []string
+//		for rows.Next() {
+//			var username string
+//			if err := rows.Scan(&username); err != nil {
+//				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+//				return
+//			}
+//			usernames = append(usernames, username)
+//		}
+//		c.JSON(http.StatusOK, gin.H{"status": "success", "message": usernames})
 	})
 
 
@@ -836,18 +836,19 @@ func main() {
 	})
 
 	router.GET("/verifier/root" , func(c *gin.Context){
-		//eddsaCSP, err := csp.New(types.CensusOriginCSPEdDSABLS12377, []byte(cspSeed))
-		//if err != nil {
-		// handle error
-		//}
-		//root := eddsaCSP.CensusRoot() // return a custom struct that is json serializable json wrapper
+		eddsaCSP, err := csp.New(types.CensusOriginCSPEdDSABLS12377, []byte(os.Getenv("CSP_SEED")))
+		if err != nil {
+		 panic(fmt.Sprintf("Root panic"))
+		}
+		root := eddsaCSP.CensusRoot() // return a custom struct that is json serializable json wrapper
+		c.JSON(200, root)
 	})
 
 	
 	router.POST("/verifier/getProof", getProof)
 	router.POST("/issuer/getVC", getVC)
 	router.POST("/issuer/register-did", registerDID)
-	err = router.RunTLS(":443", "/cert.pem", "/key.pem")
+	err = router.Run(":7531")
 	if err != nil {
 		log.Fatalf("Failed to start HTTPS server: %v", err)
 	}

@@ -31,6 +31,6 @@ COPY --from=builder /app/main /
 COPY --from=builder /app/cert.pem /
 COPY --from=builder /app/key.pem /
 
-EXPOSE 443
+EXPOSE 7531
 
 ENTRYPOINT ["/main"]
