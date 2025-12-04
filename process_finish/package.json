@@ -1,0 +1,19 @@
+{
+  "name": "vote_creation_new",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "ts-node-esm finish_vote.ts",
+    "build": "tsc",
+    "run:ts-node": "ts-node-esm finish_vote.ts"
+  },
+  "dependencies": {
+    "@vocdoni/davinci-sdk": "^0.0.3",
+    "dotenv": "^16.6.1",
+    "ethers": "^6.15.0"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}
