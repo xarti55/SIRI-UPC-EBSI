@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "start": "ts-node-esm finish_vote.ts",
+    "start": "npx tsx finish_vote.ts",
     "build": "tsc",
-    "run:ts-node": "ts-node-esm finish_vote.ts"
+    "run:ts-node": "npx tsx finish_vote.ts"
   },
   "dependencies": {
     "@vocdoni/davinci-sdk": "^0.0.3",
@@ -14,6 +14,7 @@
   },
   "devDependencies": {
     "ts-node": "^10.9.2",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }
 }
