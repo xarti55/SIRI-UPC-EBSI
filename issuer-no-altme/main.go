@@ -6,23 +6,17 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"errors"
 	"time"
 	"io"
 
 	"crypto/ecdsa"
-	"crypto/sha256"
 	"crypto/x509"
 
 	"database/sql"
 
 	"encoding/json"
 	"encoding/pem"
-	"encoding/base64"
 	"encoding/hex"
-
-	"math/big"
-	_ "math/rand"
 	
 	"github.com/lestrrat-go/jwx/v2/jwa"
 	"github.com/lestrrat-go/jwx/v2/jwt"
@@ -57,28 +51,6 @@ var googleOauthConfig = &oauth2.Config{
 	Endpoint:     google.Endpoint,
 }
 
-type JWK struct {
-    Kty string `json:"kty"`
-    Crv string `json:"crv"`
-    X   string `json:"x"`
-    Y   string `json:"y"`
-}
-
-type VerificationMethod struct {
-    ID           string `json:"id"`
-    Type         string `json:"type"`
-    Controller   string `json:"controller"`
-    PublicKeyJwk *JWK   `json:"publicKeyJwk,omitempty"`
-}
-
-type DIDDocument struct {
-    ID                 string               `json:"id"`
-    VerificationMethod []VerificationMethod `json:"verificationMethod"`
-}
-
-type RegisterPayload struct {
-    DID string `json:"did"`
-}
 
 
 type CredentialSubject struct {
@@ -87,24 +59,13 @@ type CredentialSubject struct {
 	EduPersonScopedAffiliation []string `json:"eduPersonScopedAffiliation"`
 }
 
-type CredentialWrapper struct {
-	CredentialSubject CredentialSubject `json:"credentialSubject"`
-}
-
 type Proof struct {
 	ProofType string `json:"proof_type"`
 	JWT       string `json:"jwt"`
 }
 
-type IncomingRequest struct {
-	Proof  Proof    `json:"proof"`
-	Types  []string `json:"types"`
-	Format string   `json:"format"`
-}
 
-type DIDResolutionResponse struct {
-    DIDDocument DIDDocument `json:"didDocument"`
-}
+
 
 type VC struct {
 	Context           []string          `json:"@context"`
@@ -171,24 +132,6 @@ func verifyEthereumSignature(message string, sigHex string) (bool, string, error
 
 
 
-func LoadECDSAPublicKeyFromPEM(pemData string) (*ecdsa.PublicKey, error) {
-	block, _ := pem.Decode([]byte(pemData))
-	if block == nil {
-		return nil, errors.New("failed to decode PEM block")
-	}
-
-	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse ECDSA public key: %w", err)
-	}
-
-	ecdsaPubKey, ok := pub.(*ecdsa.PublicKey)
-	if !ok {
-		return nil, errors.New("not an ECDSA public key")
-	}
-
-	return ecdsaPubKey, nil
-}
 
 func VerifyJWTAndReturnPayload(jwtString string, pubKey *ecdsa.PublicKey) (*VerifiedJWT, error) {
 	token, err := jwt.ParseString(jwtString, jwt.WithKey(jwa.ES256, pubKey))
@@ -209,151 +152,6 @@ func VerifyJWTAndReturnPayload(jwtString string, pubKey *ecdsa.PublicKey) (*Veri
 	return &verifiedJWT, nil
 }
 
-func decodeBase64URL(data string) ([]byte, error) {
-    if pad := len(data) % 4; pad != 0 {
-        data += strings.Repeat("=", 4-pad)
-    }
-    return base64.URLEncoding.DecodeString(data)
-}
-
-func getIssuerPublicKey(did string) (string, error) {
-	url := "https://api-pilot.ebsi.eu/did-registry/v5/identifiers/" + did
-
-	resp, err := http.Get(url)
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve Issuer DID: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("resolver returned %d", resp.StatusCode)
-	}
-
-	// Define matching struct for the v5 response
-	var result struct {
-		VerificationMethod []struct {
-			PublicKeyJwk *JWK `json:"publicKeyJwk"`
-		} `json:"verificationMethod"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("invalid JSON from resolver: %w", err)
-	}
-
-	// Look for a JWK with EC key type
-	for _, vm := range result.VerificationMethod {
-		if vm.PublicKeyJwk != nil && vm.PublicKeyJwk.Kty == "EC" {
-			xBytes, err := decodeBase64URL(vm.PublicKeyJwk.X)
-			if err != nil {
-				return "", fmt.Errorf("failed to decode x: %w", err)
-			}
-			yBytes, err := decodeBase64URL(vm.PublicKeyJwk.Y)
-			if err != nil {
-				return "", fmt.Errorf("failed to decode y: %w", err)
-			}
-
-			// Concatenate 0x04 || X || Y (uncompressed EC format)
-			pubKey := append([]byte{0x04}, append(xBytes, yBytes...)...)
-			return "0x" + hex.EncodeToString(pubKey), nil
-		}
-	}
-
-	return "", fmt.Errorf("no EC public key found in DID document")
-}
-
-func getPublicKeyFromDID(did string) (string, error) {
-    url := "https://uniresolver.io/1.0/identifiers/" + did
-
-    resp, err := http.Get(url)
-    if err != nil {
-        return "", fmt.Errorf("failed to resolve user DID: %w", err)
-    }
-    defer resp.Body.Close()
-
-    if resp.StatusCode != http.StatusOK {
-        return "", fmt.Errorf("resolver returned %d", resp.StatusCode)
-    }
-
-    var result DIDResolutionResponse
-    if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-        return "", fmt.Errorf("invalid JSON from resolver: %w", err)
-    }
-
-    if len(result.DIDDocument.VerificationMethod) == 0 {
-        return "", errors.New("no verification methods found")
-    }
-
-    // Use the first verification method with a JWK
-    for _, vm := range result.DIDDocument.VerificationMethod {
-        if vm.PublicKeyJwk != nil && vm.PublicKeyJwk.Kty == "EC" {
-            xBytes, err := decodeBase64URL(vm.PublicKeyJwk.X)
-            if err != nil {
-                return "", fmt.Errorf("failed to decode x: %w", err)
-            }
-
-            yBytes, err := decodeBase64URL(vm.PublicKeyJwk.Y)
-            if err != nil {
-                return "", fmt.Errorf("failed to decode y: %w", err)
-            }
-
-            // Uncompressed EC key format: 0x04 || X || Y
-            pubKey := append([]byte{0x04}, append(xBytes, yBytes...)...)
-            return "0x" + hex.EncodeToString(pubKey), nil
-        }
-    }
-
-    return "", errors.New("no supported EC public key found")
-}
-
-func decodeJWTPayload(token string) (string, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) < 2 {
-		return "", fmt.Errorf("invalid token: expected at least 2 parts")
-	}
-
-	payload := parts[1]
-
-	// Base64 URL decode
-	decoded, err := base64.RawURLEncoding.DecodeString(payload)
-	if err != nil {
-		return "", err
-	}
-
-	return string(decoded), nil
-}
-
-func generatePreAuthCodeJWT() (string, error) {
-	now := time.Now()
-
-	token := jwt.New()
-
-	if err := token.Set(jwt.IssuerKey, "did:ebsi:zwLxYsDTPjsSZCfH9VcUzSA"); err != nil {
-		return "", err
-	}
-	if err := token.Set(jwt.AudienceKey, "https://your-client-app.example.com"); err != nil { 
-		return "", err
-	}
-	if err := token.Set(jwt.IssuedAtKey, now); err != nil {
-		return "", err
-	}
-	if err := token.Set(jwt.ExpirationKey, now.Add(10 * time.Minute)); err != nil { 
-		return "", err
-	}
-	if err := token.Set("nonce", "random-nonce-abc"); err != nil { // or generate a real random nonce
-		return "", err
-	}
-	if err := token.Set(jwt.SubjectKey, "some-subject-identifier"); err != nil {
-		return "", err
-	}
-
-	// Sign the JWT using your private key and ES256 algorithm
-	signed, err := jwt.Sign(token, jwt.WithKey(jwa.ES256, privKey))
-	if err != nil {
-		return "", err
-	}
-
-	return string(signed), nil
-}
 
 // Get the private key from the enviroment
 func getPrivateKey() {
@@ -389,19 +187,33 @@ func getPublicKey() {
 
 func registerDID(c *gin.Context) {
 	session := sessions.Default(c)
-	email := session.Get("email")
-	if email == nil {
+	// Get the email from the session
+	emailValue := session.Get("email")
+	if emailValue == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Not logged in"})
 		return
 	}
 
+	email, ok := emailValue.(string)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid email type in session"})
+		return
+	}
+
+	// The email is part of the UPC
+	if !strings.HasSuffix(email, "@estudiantat.upc.edu") {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Email is not a UPC student email", "email": email})
+		return
+	}
+
+	// Get the DID from the form
 	did := c.PostForm("did")
 	if did == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "DID is required"})
 		return
 	}
 
-	// Insert into DB, assuming your users table has "username" and "did"
+	// Insert into DB
 	_, err := db.Exec("INSERT INTO users (username, did) VALUES ($1, $2) ON CONFLICT (username) DO UPDATE SET did = EXCLUDED.did", email, did)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "DB insert failed", "details": err.Error()})
@@ -465,23 +277,9 @@ func issueVC(username string, DID string) (string, error) {
 	return string(signed), nil
 }
 
-func verifySignature(data CredentialWrapper, sigBytes []byte) (bool, error) {
-	half := len(sigBytes) / 2
-	if half == 0 {
-		return false, nil
-	}
-	jsonBytes, err := json.Marshal(data)
-	if err != nil {
-		return false, nil
-	}
-	r := new(big.Int).SetBytes(sigBytes[:half])
-	s := new(big.Int).SetBytes(sigBytes[half:])
-	digest := sha256.Sum256(jsonBytes)
-	ok := ecdsa.Verify(pubKey, digest[:], r, s)
-	return ok, nil
-}
 
 func getVC(c *gin.Context) {
+	// Struct from the body
     var body struct {
         Iss   string `json:"iss"`
         Proof struct {
@@ -491,22 +289,25 @@ func getVC(c *gin.Context) {
         } `json:"proof"`
     }
 
+	// Ensure the posted content contains the expected body
     if err := c.ShouldBindJSON(&body); err != nil {
         c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json", "details": err.Error()})
         return
     }
 
+	// If any of the contents is empty, return error
     if body.Iss == "" || body.Proof.Message == "" || body.Proof.Signature == "" {
         c.JSON(http.StatusBadRequest, gin.H{"error": "iss, proof.message and proof.signature are required"})
         return
     }
 
+	// The DID must be a did:ethr type
     if !strings.HasPrefix(body.Iss, "did:ethr:") {
         c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported DID method (expect did:ethr:...)"})
         return
     }
 
-    // normalize DID address & lowercase for comparison
+    // Normalize DID address & lowercase for comparison
     didAddr := strings.TrimPrefix(body.Iss, "did:ethr:")
     if !strings.HasPrefix(didAddr, "0x") {
         didAddr = "0x" + didAddr
@@ -516,8 +317,7 @@ func getVC(c *gin.Context) {
     // Verify signature
     ok, recoveredAddr, err := verifyEthereumSignature(body.Proof.Message, body.Proof.Signature)
     if err != nil {
-        // include details while debugging - remove or redact in production
-        c.JSON(http.StatusBadRequest, gin.H{"error": "signature verification error", "details": err.Error()})
+        c.JSON(http.StatusBadRequest, gin.H{"error": "signature verification error"})
         return
     }
     if !ok {
@@ -525,7 +325,7 @@ func getVC(c *gin.Context) {
         return
     }
 
-    // Log addresses so you can see mismatches in logs / ngrok
+    // Logging the address
     log.Printf("getVC: DID=%s recoveredAddr=%s", didAddr, recoveredAddr)
 
     if strings.ToLower(recoveredAddr) != strings.ToLower(didAddr) {
@@ -535,16 +335,16 @@ func getVC(c *gin.Context) {
 
     iss := body.Iss
 
-    // Find user by DID
+    // Find user by DID on the database
     var username string
-    err = db.QueryRow("SELECT username FROM users WHERE did = $1", iss).Scan(&username)
+    err = db.QueryRow("SELECT username FROM users WHERE did = $1 and issued = false", iss).Scan(&username)
     if err != nil {
         if err == sql.ErrNoRows {
-            // DID not registered with your service
+            // DID not registered
             c.JSON(http.StatusNotFound, gin.H{"error": "did not found in users table", "did": iss})
             return
         }
-        // other DB error
+        // other DB errors
         log.Printf("getVC: DB query error: %v", err)
         c.JSON(http.StatusInternalServerError, gin.H{"error": "db query failed", "details": err.Error()})
         return
@@ -558,10 +358,23 @@ func getVC(c *gin.Context) {
         return
     }
 
-    log.Println("Returning VC JWT to wallet")
-    // Optionally redact JWT in logs during production
+	err = db.QueryRow("UPDATE users SET issued = true WHERE did = $1 RETURNING username", iss).Scan(&username)
+    if err != nil {
+        if err == sql.ErrNoRows {
+            // DID not registered
+            c.JSON(http.StatusNotFound, gin.H{"error": "did not found in users table", "did": iss})
+            return
+        }
+        // other DB errors
+        log.Printf("getVC: DB query error: %v", err)
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "db query failed", "details": err.Error()})
+        return
+    }
+	
+
     log.Printf("getVC: issued for user=%s did=%s", username, iss)
 
+	// Return the VC
     c.JSON(http.StatusOK, gin.H{
         "format":     "jwt_vc_json",
         "credential": jwtVC,
@@ -569,35 +382,37 @@ func getVC(c *gin.Context) {
 }
 
 
-func DIDtoKey(){
-
-}
-
 func getProof(c *gin.Context) {
+
+	// Post must have the VC JWT
 	jwtString := c.PostForm("JWT")
 	if jwtString == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing 'JWT' in POST form data"})
 		return
 	}
 
+	// Post must have the public key from the user
 	publicKey := c.PostForm("publicKey")
 	if publicKey == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing 'publicKey' in POST form data"})
 		return
 	}
 
+	// Post must have the DID address
 	address := c.PostForm("address")
 	if address == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing 'address' in POST form data"})
 		return
 	}
 
+	// Post must have the user public key
 	processID:= c.PostForm("processId")
 	if processID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing 'processId' in POST form data"})
 		return
 	}
 
+	// Decode the process ID
 	strPID := util.TrimHex(processID)
 	bPID, err := hex.DecodeString(strPID)
 	if err != nil {
@@ -610,6 +425,7 @@ func getProof(c *gin.Context) {
 		return
 	}
 
+	// Authenticate that the VC was issued by the right Issuer
 	IssuerPubKey := pubKey
 	VC, err := VerifyJWTAndReturnPayload(jwtString, IssuerPubKey)
 	if err != nil {
@@ -617,6 +433,7 @@ func getProof(c *gin.Context) {
 		return
 	}
 
+	// Create the census origin of the CSP
 	origin := types.CensusOriginCSPEdDSABLS12377
 	seed := []byte(os.Getenv("CSP_SEED"))
 	csp, err := csp.New(origin, seed)
@@ -624,7 +441,7 @@ func getProof(c *gin.Context) {
 		panic(fmt.Sprintf("failed to create CSP: %v", err))
 	}
 
-
+	// Check that the user is part of the specific census 
 	var username string
 	err = db.QueryRow("SELECT * FROM FINE_users WHERE username = $1", VC.VC.CredentialSubject.Identifier).Scan(&username)
 	if err != nil {
@@ -652,19 +469,21 @@ func getProof(c *gin.Context) {
 	fmt.Println(voter)
 	
 	addr := common.HexToAddress(address)
+
+	// Generate the proof for the user and process
 	proof, err := csp.GenerateProof(pid, addr)
 	
 	if err != nil {
 		panic(fmt.Sprintf("failed to generate proof: %v", err))
 	}
-	fmt.Println("VOter address: ", addr)
+	fmt.Println("Voter address: ", addr)
 
-
+	// Verify that the proof was generated correctly
 	if err := csp.VerifyProof(proof); err != nil {
 		panic(fmt.Sprintf("failed to verify proof: %v", err))
 	}
 
-	fmt.Println("Census proof verified successfully!")
+	fmt.Println("Census proof verified successfully for ")
 
 	c.JSON(http.StatusOK, gin.H{
 		"proof": proof,
